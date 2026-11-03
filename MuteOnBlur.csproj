@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <AssemblyName>MuteOnBlur</AssemblyName>
+    <RootNamespace>MuteOnBlur</RootNamespace>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- IconGen is its own project; keep its sources out of this one. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);IconGen/**</DefaultItemExcludes>
+    <Company>ilufang</Company>
+    <Product>Mute-On-Blur</Product>
+  </PropertyGroup>
+
+  <!-- `dotnet publish -c Release` produces one standalone EXE (no .NET install needed).
+       Pass -p:SelfContained=false for a small EXE that requires the .NET 10 Desktop Runtime. -->
+  <PropertyGroup Condition="'$(_IsPublishing)' == 'true'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained Condition="'$(SelfContained)' == ''">true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile Condition="'$(SelfContained)' == 'true'">true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="app.ico" LogicalName="app.ico" />
+  </ItemGroup>
+
+</Project>
