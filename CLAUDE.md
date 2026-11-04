@@ -39,29 +39,36 @@ mixer while their window is not in the foreground, and unmutes them when they ge
    - A poll every 2 s refreshes the output devices and catches sessions whose notification was missed.
 5. Tray menu: left- or right-click rebuilds the menu from `MuteController.GetSnapshot()`, a blocking
    round-trip to the audio thread.
-   - The menu lists managed apps (click to unmanage), currently playing unmanaged apps (click to
-     manage), and Exit.
-   - The menu stays open after a toggle and rebuilds itself.
-6. Exit, triggered from the menu or by Windows session end: unhook the WinEvents, then dispose the
+   - The top level lists running managed apps (click to unmanage), then two cascades: "Managed" holds
+     managed apps that are not running, "Playing" holds currently playing unmanaged apps (click to
+     manage). Exit comes last.
+   - The menu stays open after a toggle and rebuilds itself, reopening the cascade the click came from.
+6. Exit, triggered from the menu or by Windows session end: stop the poll and unhook the WinEvents, then dispose the
    controller. Disposing unmutes the sessions it muted, saves state and stops the audio thread.
 
 ## Files
 
 - `Program.cs`: entry point, single-instance mutex, global exception logging.
 - `TrayApp.cs`: `ApplicationContext`. Owns the tray icon (embedded `app.ico`), builds the menu, caches
-  each app's display text and icon (taken from the exe), and handles exit.
+  each exe's description and icon, and handles exit. A menu item reads "Name (exe)": the name is the
+  snapshot's mixer name, falling back to the exe's description.
 - `FocusWatcher.cs`: tracks the foreground app. It resolves UWP apps hosted in ApplicationFrameHost to
   the child app's process, and holds the ignore lists (`IgnoredClasses`, `IgnoredApps`). The Start
   menu/search window (`searchapp.exe`) and the desktop (`WorkerW`/`Progman`) are deliberately *not*
   ignored, so opening either one mutes the app.
 - `MuteController.cs`: audio thread, device and session management, mute reconciliation, the snapshot
-  used by the menu, and the shutdown unmute.
+  used by the menu (which also records the names of managed apps), and the shutdown unmute.
 - `AudioSession.cs`: wrapper around one audio session. It filters out system, own-process and dead
-  sessions, and exposes the ids, mute state (set with a fixed event-context GUID) and peak level.
+  sessions, and exposes the ids, mute state (set with a fixed event-context GUID) peak level and
+  display name.
+- `AppNames.cs`: the name the volume mixer shows for an app, used in the snapshot. Tries the session
+  display name, then the package-level DisplayName from the app's AppxManifest.xml (Apple Music plays
+  from `amplibraryagent.exe`), then the title of the process's main window (Siglus games).
 - `CoreAudio.cs`: hand-written COM interop for the MMDevice and audio session APIs, plus
   `SessionNotifier`.
 - `Win32.cs`: P/Invoke declarations and helpers. An app id is the lower-cased exe file name.
-- `Storage.cs`: JSON files under `%APPDATA%\MuteOnBlur\`. `config.json` holds `{"managed": [...]}` and
+- `Storage.cs`: JSON files under `%APPDATA%\MuteOnBlur\`. `config.json` holds `{"managed": [...], "names": {appId: name}}`, where `names` is each managed app's
+  mixer name as first seen running (shown while it is not running). and
   `muted-by-us.json` holds session identifiers. Writes are atomic (temp file + move).
 - `Log.cs`: `log.txt` in the same folder, reset at startup once it exceeds 1 MB. Severity levels are
   `Debug`/`Info`/`Warning`/`Error`; Debug lines reach the file only in Debug builds.

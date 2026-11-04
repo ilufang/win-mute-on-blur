@@ -4,7 +4,10 @@ using Microsoft.Win32;
 
 namespace MuteOnBlur;
 
-/// <summary>Tray icon plus the context menu that lists managed and currently playing apps.</summary>
+/// <summary>
+/// Tray icon plus the context menu: running managed apps at the top level, managed apps that are not
+/// running under "Managed", and unmanaged playing apps under "Playing".
+/// </summary>
 sealed class TrayApp : ApplicationContext
 {
     // NotifyIcon only opens its menu on right-click; this internal method opens it the same way for left-click.
@@ -16,7 +19,7 @@ sealed class TrayApp : ApplicationContext
     readonly ContextMenuStrip _menu;
     readonly NotifyIcon _tray;
     readonly Icon _icon;
-    readonly Dictionary<string, (string Text, Icon? Icon)> _appVisuals = new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, (string? Description, Icon? Icon)> _appVisuals = new(StringComparer.OrdinalIgnoreCase);
     bool _exiting;
 
     public TrayApp()
@@ -49,7 +52,8 @@ sealed class TrayApp : ApplicationContext
 
     void OnSessionEnded(object? sender, SessionEndedEventArgs e) => Exit();
 
-    void Rebuild()
+    /// <param name="reopen">Text of the submenu to open again after the rebuild, the one an app was toggled in.</param>
+    void Rebuild(string? reopen = null)
     {
         Snapshot snapshot;
         try
@@ -63,68 +67,102 @@ sealed class TrayApp : ApplicationContext
         }
 
         _menu.SuspendLayout();
-        var old = _menu.Items.Cast<ToolStripItem>().ToList();
-        _menu.Items.Clear();
-        foreach (var item in old)
-        {
-            item.Image?.Dispose();
-            item.Dispose();
-        }
+        DisposeItems(_menu.Items);
 
         AddHeader("Muting upon blur");
-        foreach (var app in snapshot.Managed) AddApp(app, managed: true);
-        if (snapshot.Managed.Count == 0) AddHeader("    (none)");
+        var running = snapshot.Managed.Where(a => a.Running).ToList();
+        foreach (var app in running) AddApp(_menu.Items, app, managed: true, submenu: null);
+        if (running.Count == 0) AddHeader("    (none)");
 
         _menu.Items.Add(new ToolStripSeparator());
-        AddHeader("Playing now");
-        foreach (var app in snapshot.Playing) AddApp(app, managed: false);
-        if (snapshot.Playing.Count == 0) AddHeader("    (none)");
+        var submenus = new[]
+        {
+            AddSubmenu("Managed", "Click to remove", "(Non-running managed apps will show here)",
+                snapshot.Managed.Where(a => !a.Running), managed: true),
+            AddSubmenu("Playing", "Click to manage", "(Unmanaged apps playing audio will show here)",
+                snapshot.Playing, managed: false),
+        };
 
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => Exit()));
         _menu.ResumeLayout();
+
+        submenus.FirstOrDefault(s => s.Text == reopen)?.ShowDropDown();
     }
 
-    void AddHeader(string text) => _menu.Items.Add(new ToolStripMenuItem(text) { Enabled = false });
+    static void DisposeItems(ToolStripItemCollection items)
+    {
+        var old = items.Cast<ToolStripItem>().ToList();
+        items.Clear();
+        foreach (var item in old)
+        {
+            if (item is ToolStripDropDownItem { HasDropDownItems: true } parent) DisposeItems(parent.DropDownItems);
+            item.Image?.Dispose();
+            item.Dispose();
+        }
+    }
 
-    void AddApp(AppEntry app, bool managed)
+    void AddHeader(string text) => AddHeader(_menu.Items, text);
+
+    static void AddHeader(ToolStripItemCollection items, string text) =>
+        items.Add(new ToolStripMenuItem(text) { Enabled = false });
+
+    /// <summary>A cascading item holding a header and the given apps, or the placeholder when there are none.</summary>
+    ToolStripMenuItem AddSubmenu(string text, string desc, string placeholder, IEnumerable<AppEntry> apps, bool managed)
+    {
+        var submenu = new ToolStripMenuItem(text);
+        AddHeader(submenu.DropDownItems, desc);
+        foreach (var app in apps) AddApp(submenu.DropDownItems, app, managed, text);
+        if (submenu.DropDownItems.Count == 1) AddHeader(submenu.DropDownItems, placeholder);
+        _menu.Items.Add(submenu);
+        return submenu;
+    }
+
+    void AddApp(ToolStripItemCollection items, AppEntry app, bool managed, string? submenu)
     {
         var (text, icon) = GetVisual(app);
         var item = new ToolStripMenuItem(text.Replace("&", "&&"))
         {
             Checked = managed,
             Image = icon?.ToBitmap(),
-            ShortcutKeyDisplayString = !managed && app.Audible ? "♪" : null,
+            ShortcutKeyDisplayString = app.Audible ? "♪" : null,
             ToolTipText = app.ExePath,
         };
         item.Click += (_, _) =>
         {
             _controller.SetManaged(app.AppId, !managed);
             // Rebuild after the click handler returns; the snapshot request queues behind the change.
-            _menu.BeginInvoke(Rebuild);
+            _menu.BeginInvoke(() => Rebuild(submenu));
         };
-        _menu.Items.Add(item);
+        items.Add(item);
     }
 
-    /// <summary>"Description (exe)" and the exe's icon, cached per app once its path has been seen.</summary>
+    /// <summary>"Name (exe)" and the exe's icon. The name is the mixer's, else the exe's description.</summary>
     (string Text, Icon? Icon) GetVisual(AppEntry app)
     {
-        if (_appVisuals.TryGetValue(app.AppId, out var cached)) return cached;
-        if (app.ExePath == null) return (app.AppId, null);
+        var (description, icon) = GetExeVisual(app);
+        var name = app.Name ?? description;
+        bool useful = !string.IsNullOrEmpty(name) && !name.Equals(app.AppId, StringComparison.OrdinalIgnoreCase);
+        return (useful ? $"{name} ({app.AppId})" : app.AppId, icon);
+    }
 
-        string text = app.AppId;
+    /// <summary>The exe's description and icon, cached per app once its path has been seen.</summary>
+    (string? Description, Icon? Icon) GetExeVisual(AppEntry app)
+    {
+        if (_appVisuals.TryGetValue(app.AppId, out var cached)) return cached;
+        if (app.ExePath == null) return (null, null);
+
+        string? description = null;
         Icon? icon = null;
         try
         {
-            var description = FileVersionInfo.GetVersionInfo(app.ExePath).FileDescription?.Trim();
-            if (!string.IsNullOrEmpty(description) && !description.Equals(app.AppId, StringComparison.OrdinalIgnoreCase))
-                text = $"{description} ({app.AppId})";
+            description = FileVersionInfo.GetVersionInfo(app.ExePath).FileDescription?.Trim();
             icon = Icon.ExtractAssociatedIcon(app.ExePath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
         }
-        return _appVisuals[app.AppId] = (text, icon);
+        return _appVisuals[app.AppId] = (description, icon);
     }
 
     /// <summary>The embedded app.ico, at the image closest to the tray's icon size.</summary>

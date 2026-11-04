@@ -60,6 +60,24 @@ sealed class AudioSession : IDisposable
         return null;
     }
 
+    /// <summary>The name the app gave its session, if any, with "@dll,-id" references resolved.</summary>
+    public string? DisplayName
+    {
+        get
+        {
+            try
+            {
+                ((IAudioSessionControl2)_com).GetDisplayName(out string name);
+                if (string.IsNullOrEmpty(name)) return null;
+                return name.StartsWith('@') ? Win32.LoadIndirectString(name) : name;
+            }
+            catch (COMException)
+            {
+                return null;
+            }
+        }
+    }
+
     public bool IsMuted
     {
         get

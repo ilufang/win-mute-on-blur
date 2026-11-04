@@ -3,7 +3,8 @@ using System.Runtime.InteropServices;
 
 namespace MuteOnBlur;
 
-sealed record AppEntry(string AppId, string? ExePath, bool Audible);
+/// <param name="Name">The name the volume mixer shows, or the remembered one for a managed app that is not running.</param>
+sealed record AppEntry(string AppId, string? ExePath, bool Audible, string? Name);
 
 sealed record Snapshot(IReadOnlyList<AppEntry> Managed, IReadOnlyList<AppEntry> Playing)
 {
@@ -29,6 +30,8 @@ sealed class MuteController : IDisposable
     readonly HashSet<string> _seen = new();
     readonly HashSet<string> _managed;
     readonly HashSet<string> _mutedByUs;
+    // Mixer names of managed apps, recorded the first time each is seen running.
+    readonly Dictionary<string, string> _names = new(StringComparer.OrdinalIgnoreCase);
     IMMDeviceEnumerator? _enumerator;
     string? _foreground;
     bool _stopping;
@@ -37,7 +40,10 @@ sealed class MuteController : IDisposable
     public MuteController(string? initialForeground)
     {
         _foreground = initialForeground;
-        _managed = new(Storage.LoadManaged(), StringComparer.OrdinalIgnoreCase);
+        var config = Storage.LoadConfig();
+        _managed = new(config.Managed, StringComparer.OrdinalIgnoreCase);
+        foreach (var (appId, name) in config.Names)
+            if (_managed.Contains(appId)) _names.TryAdd(appId, name);
         _mutedByUs = new(Storage.LoadMutedByUs());
         _notifier = new SessionNotifier(() => Post(() => Reconcile(onlyNew: true)));
         _thread = new Thread(Run) { IsBackground = true, Name = "Audio" };
@@ -56,7 +62,8 @@ sealed class MuteController : IDisposable
     {
         if (!(managed ? _managed.Add(appId) : _managed.Remove(appId))) return;
         Log.Info($"{(managed ? "Managing" : "Unmanaging")} {appId}");
-        Storage.SaveManaged(_managed);
+        if (!managed) _names.Remove(appId);
+        SaveConfig();
         Reconcile(onlyNew: false);
     });
 
@@ -80,6 +87,8 @@ sealed class MuteController : IDisposable
         _queue.CompleteAdding();
         if (!_thread.Join(3000)) Log.Error("Audio thread did not stop in time");
     }
+
+    void SaveConfig() => Storage.SaveConfig(_managed, _names);
 
     void Post(Action action)
     {
@@ -272,18 +281,34 @@ sealed class MuteController : IDisposable
                     g.First().ExePath,
                     Active = g.Any(s => s.State == AudioSessionState.Active),
                     Audible = g.Any(s => s.State == AudioSessionState.Active && s.Peak > AudiblePeak),
+                    Name = AppNames.Find(g.ToList()),
                 })
                 .ToDictionary(a => a.AppId, StringComparer.OrdinalIgnoreCase);
 
-            var managed = _managed
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .Select(id => apps.TryGetValue(id, out var a) ? new AppEntry(id, a.ExePath, a.Audible) : new AppEntry(id, null, false))
-                .ToList();
+            var managed = new List<AppEntry>();
+            bool namesChanged = false;
+            foreach (var id in _managed.Order(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!apps.TryGetValue(id, out var a))
+                {
+                    managed.Add(new AppEntry(id, null, false, _names.GetValueOrDefault(id)));
+                    continue;
+                }
+                // Remembered so the menu can still name the app after it exits.
+                if (a.Name != null && _names.TryAdd(id, a.Name))
+                {
+                    Log.Info($"Name of {id}: {a.Name}");
+                    namesChanged = true;
+                }
+                managed.Add(new AppEntry(id, a.ExePath, true, a.Name ?? _names.GetValueOrDefault(id)));
+            }
+            if (namesChanged) SaveConfig();
+
             var playing = apps.Values
                 .Where(a => /* a.Active && */ !_managed.Contains(a.AppId))
                 .OrderByDescending(a => a.Audible)
                 .ThenBy(a => a.AppId, StringComparer.OrdinalIgnoreCase)
-                .Select(a => new AppEntry(a.AppId, a.ExePath, a.Audible))
+                .Select(a => new AppEntry(a.AppId, a.ExePath, a.Audible, a.Name))
                 .ToList();
             return new Snapshot(managed, playing);
         }

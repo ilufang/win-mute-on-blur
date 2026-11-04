@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace MuteOnBlur;
@@ -5,6 +6,8 @@ namespace MuteOnBlur;
 sealed class ConfigFile
 {
     public List<string> Managed { get; set; } = [];
+    // Mixer names of managed apps as first seen running, shown while the app is not running.
+    public Dictionary<string, string> Names { get; set; } = [];
 }
 
 /// <summary>Files under %APPDATA%\MuteOnBlur.</summary>
@@ -19,12 +22,24 @@ static class Storage
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        // Keeps non-ASCII app names readable instead of escaping them.
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    public static IEnumerable<string> LoadManaged() => Read<ConfigFile>(ConfigPath)?.Managed ?? [];
+    public static ConfigFile LoadConfig()
+    {
+        var config = Read<ConfigFile>(ConfigPath) ?? new();
+        config.Managed ??= [];
+        config.Names ??= [];
+        return config;
+    }
 
-    public static void SaveManaged(IEnumerable<string> appIds) =>
-        Write(ConfigPath, new ConfigFile { Managed = appIds.Order(StringComparer.OrdinalIgnoreCase).ToList() });
+    public static void SaveConfig(IEnumerable<string> managed, IReadOnlyDictionary<string, string> names) =>
+        Write(ConfigPath, new ConfigFile
+        {
+            Managed = managed.Order(StringComparer.OrdinalIgnoreCase).ToList(),
+            Names = names.OrderBy(n => n.Key, StringComparer.OrdinalIgnoreCase).ToDictionary(),
+        });
 
     public static IEnumerable<string> LoadMutedByUs() => Read<List<string>>(MutedByUsPath) ?? [];
 
