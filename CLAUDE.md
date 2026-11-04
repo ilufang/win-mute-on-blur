@@ -26,10 +26,19 @@ mixer while their window is not in the foreground, and unmutes them when they ge
    and runs `TrayApp` on the STA UI thread.
 2. `TrayApp` creates a `FocusWatcher`, then a `MuteController` seeded with the current foreground app,
    and wires `FocusWatcher.Changed` to `MuteController.SetForeground`.
-3. `FocusWatcher`, on the UI thread, receives WinEvent callbacks (foreground change and minimize-end)
-   through the message loop. For each event it captures the window and logs it at Debug level. It then
-   drops shell surfaces (taskbar, Alt-Tab), its own windows and ignored apps. When the foreground app id
-   changes, it raises `Changed`.
+3. `FocusWatcher`, on the UI thread, checks the foreground window on a 500 ms WinForms timer.
+   - WinEvent callbacks (foreground change, minimize-start, minimize-end) arrive through the message loop.
+     They are logged, then only pull the next check forward to 30 ms. A burst of events collapses into one
+     check.
+   - Events are only wake-ups because their timing cannot be trusted. Seen with Win-D: one arrived before
+     `GetForegroundWindow` changed, a stale desktop event arrived after a real switch, and sometimes none
+     came at all.
+   - The check reads `GetForegroundWindow`.
+     - A minimized foreground window means no app has focus, reported as a null app id.
+     - Otherwise shell surfaces (taskbar, Alt-Tab), its own windows and ignored apps are dropped, and the
+       previous app stays.
+     - Win-D makes the desktop `WorkerW` the foreground window, which counts as leaving the app.
+   - When the app id changes, it raises `Changed`. Quiet polls are not logged.
 4. `MuteController` keeps every Core Audio COM object on one dedicated MTA thread, because session
    notifications only reach MTA clients. Public methods post actions to a `BlockingCollection` queue.
    - Reconcile rule: mute a session iff its app is managed and is not the foreground app.

@@ -6,6 +6,7 @@ namespace MuteOnBlur;
 static class Win32
 {
     public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+    public const uint EVENT_SYSTEM_MINIMIZESTART = 0x0016;
     public const uint EVENT_SYSTEM_MINIMIZEEND = 0x0017;
     public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
     public const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
@@ -38,6 +39,9 @@ static class Win32
 
     [DllImport("user32.dll")]
     static extern bool IsWindowVisible(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hwnd);
 
     [DllImport("user32.dll")]
     static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);

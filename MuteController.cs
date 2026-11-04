@@ -4,7 +4,11 @@ using System.Runtime.InteropServices;
 namespace MuteOnBlur;
 
 /// <param name="Name">The name the volume mixer shows, or the remembered one for a managed app that is not running.</param>
-sealed record AppEntry(string AppId, string? ExePath, bool Audible, string? Name);
+sealed record AppEntry(string AppId, string? ExePath, bool Audible, string? Name)
+{
+    /// <summary>Whether the app has an audio session; only a managed app that is not running has no path.</summary>
+    public bool Running => ExePath != null;
+}
 
 sealed record Snapshot(IReadOnlyList<AppEntry> Managed, IReadOnlyList<AppEntry> Playing)
 {
@@ -51,9 +55,10 @@ sealed class MuteController : IDisposable
         _thread.Start();
     }
 
-    public void SetForeground(string appId) => Post(() =>
+    /// <summary>Null when no app has focus, e.g. its window was minimized and nothing else took over.</summary>
+    public void SetForeground(string? appId) => Post(() =>
     {
-        Log.Debug($"Foreground: {appId}");
+        Log.Debug($"Foreground: {appId ?? "(none)"}");
         _foreground = appId;
         Reconcile(onlyNew: false);
     });
